@@ -134,8 +134,6 @@ tap
 [issues-url]: https://img.shields.io/github/issues/pehmc/tap-wrapper.svg
 [license-shield]: https://img.shields.io/github/license/pehmc/tap-wrapper.svg?style=flat-square
 [license-url]: https://github.com/pehmc/tap-wrapper/blob/master/LICENSE.txt
-[linkedin-shield]: https://img.shields.io/badge/-LinkedIn-black.svg?style=flat-square&logo=linkedin&colorB=555
-[linkedin-url]: https://linkedin.com/in/shaojintian
 
 
 

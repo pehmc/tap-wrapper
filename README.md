@@ -38,8 +38,8 @@
 
 1. 克隆仓库，
 2. tap/v 管理版本
-3. 运行 `python wrapper --version <...>`
-4. `import ... from tap.api`
+3. 运行 `python wrapper <version>`
+4. `from tap.api import ...`
 
 ### 文件目录说明
 
@@ -48,44 +48,25 @@
 ``` python
 tap
 ├── api
-│   ├── __init__.py               # 暴露 api
-│   ├── libcrypto.so.1.1
-│   ├── libiTapTradeAPI.so
-│   ├── libssl.so.1.1
-│   ├── libTapDataCollectAPI.so
-│   ├── libTapQuoteAPI.so
-│   ├── tap_md_common_constant.py
-│   ├── tap_md_common_struct.py
-│   ├── tap_md_common_typedef.py
-│   ├── tapmd.cpython-313-x86_64-linux-gnu.so
-│   ├── tap_md_data_struct.py
-│   ├── tap_md_data_typedef.py
-│   ├── tap_md_error_constant.py
-│   ├── tapmd.pyi
-│   ├── tap_td_common_constant.py
-│   ├── tap_td_common_struct.py
-│   ├── tap_td_common_typedef.py
-│   ├── taptd.cpython-313-x86_64-linux-gnu.so
-│   ├── tap_td_data_constant.py
-│   ├── tap_td_data_struct.py
-│   ├── tap_td_data_typedef.py
-│   ├── tap_td_error_constant.py
-│   └── taptd.pyi
-├── generator
-│   ├── gen_api_commdef.py
-│   ├── gen_api_error.py
-│   ├── gen_api_functions.py
-│   ├── gen_data_type.py
-│   ├── gen.py
-│   └── templates
-│       ├── tap_header.j2
-│       └── tap_source.j2
+│   ├── con
+│   │   ├── md
+│   │   │   └── TapQuoteAPI20260511.log
+│   │   └── td
+│   ├── __init__.py
+│   ├── mdapi.py
+│   ├── _mdapi.so
+│   │   ├── __init__.cpython-313.pyc
+│   │   ├── mdapi.cpython-313.pyc
+│   │   └── tdapi.cpython-313.pyc
+│   ├── tdapi.py
+│   └── _tdapi.so
 ├── __init__.py
-├── meson.build
-├── v                       # 版本管理
-│   ├── tap.h
+├── interface
+│   ├── mdapi.i
+│   └── tdapi.i
+├── v
 │   └── v9.3.8
-│       ├── include         # 官方头文件
+│       ├── include
 │       │   ├── iTapAPICommDef.h
 │       │   ├── iTapAPIError.h
 │       │   ├── iTapDataCollectAPI.h
@@ -95,28 +76,29 @@ tap
 │       │   ├── TapAPIError.h
 │       │   ├── TapQuoteAPIDataType.h
 │       │   └── TapQuoteAPI.h
-│       ├── libs          # 官方库
+│       ├── libs
 │       │   ├── libcrypto.so.1.1
 │       │   ├── libiTapTradeAPI.so
 │       │   ├── libssl.so.1.1
 │       │   ├── libTapDataCollectAPI.so
 │       │   └── libTapQuoteAPI.so
 │       └── src
-│           ├── tapmd
-│           │   ├── tapmd.cpp
-│           │   └── tapmd.h
-│           └── taptd
-│               ├── taptd.cpp
-│               └── taptd.h
+│           ├── mdapi.py
+│           ├── mdapi_wrap.cpp
+│           ├── mdapi_wrap.h
+│           ├── mdapi_wrap.o
+│           ├── tdapi.py
+│           ├── tdapi_wrap.cpp
+│           ├── tdapi_wrap.h
+│           └── tdapi_wrap.o
 └── wrapper.py
+
 ```
 
 ### 使用到的框架
 
-- jinja2
-- pybind11
-- pybind11-stubgen
-- meson
+- swig 4.4.1
+- python 3.13
 
 ### 鸣谢
 

@@ -3,252 +3,235 @@ Copyright (c) 2026 pehmc. Apache 2.0 License.
 See LICENSE file in the project root for full license information.
 """
 
-import argparse
-import glob
+#!/usr/bin/env python3
 import os
+import sys
 import shutil
 import subprocess
-import sys
 import sysconfig
 from pathlib import Path
 
-# 项目根目录（脚本所在目录）
-ROOT = Path(__file__).parent.resolve()
-# meson build dir
-build_dir = ROOT / ".build"
-# TAP 需要的 libs
-tap_libs = ["libTapQuoteAPI.so", "libiTapTradeAPI.so", "libcrypto.so.1.1", "libssl.so.1.1", "libTapDataCollectAPI.so"]
 
-def run(cmd, cwd=None, env=None, check=True):
-    """统一命令执行，带日志输出"""
-    cmd_str = ' '.join(str(c) for c in cmd)
-    ret = subprocess.run(cmd, cwd=cwd, env=env)
-    if check and ret.returncode != 0:
-        raise RuntimeError(f"[x] 命令失败: {cmd_str}")
-    return ret
-
-
-def check_environment(version_dir: Path):
-    """统一环境检查"""
-    print("[1/5] 环境检查")
-    if sys.version_info < (3, 10):
-        raise RuntimeError(f"[!] 需要 Python >= 3.10，当前: {sys.version}")
-
-    if not version_dir.exists():
-        raise RuntimeError(
-            f"[x] 版本目录不存在: {version_dir}\n"
-            f"[x] 请确认 {ROOT / 'v'}/ 目录下有该版本"
-        )
-
-    libs_dir = version_dir / "libs"
-    for lib in tap_libs:
-        if not (libs_dir / lib).exists():
-            raise RuntimeError(f"[x] 缺少 TAP 动态库: {libs_dir / lib}")
-
-    try:
-        __import__("mesonbuild")
-    except ImportError:
-        ret = subprocess.run(["meson", "--version"], capture_output=True)
-        if ret.returncode != 0:
-            raise RuntimeError("[x] 未找到 meson，请安装: pip install meson-python")
-
-    deps = {
-        "pybind11": "pybind11",
-        "pybind11_stubgen": "pybind11_stubgen"
-    }
-    for mod, pkg in deps.items():
-        try:
-            __import__(mod)
-        except ImportError:
-            print(f"[*] 安装依赖: {pkg}")
-            run([sys.executable, "-m", "pip", "install", pkg])
-
-    if sys.prefix == sys.base_prefix:
-        print("[!] 未检测到虚拟环境，建议激活 .venv")
-
-    print("[*] 环境检查通过")
-
-
-def generate_bindings(version: str, version_dir: Path):
-    """生成 C++ 绑定代码"""
-    print("\n[2/5] 生成 C++ 绑定代码")
-    generator = ROOT / "generator" / "gen.py"
-    if not generator.exists():
-        raise RuntimeError(f"[x] 未找到生成器脚本: {generator}")
-
-    run([
-        sys.executable, str(generator),
-        f"--include-dir={version_dir / 'include'}",
-        f"--output-dir={version_dir / 'src'}"
-    ])
-    print("[*] 绑定代码生成完成")
-
-
-def meson_build(version: str, clean: bool = False):
-    """Meson 编译（setup + compile）"""
-    print("\n[3/5] Meson 编译")
-    
-    if clean and build_dir.exists():
-        shutil.rmtree(build_dir)
-        print("[*] 已清理 .build/ 目录")
-
-    env = os.environ.copy()
-    env["TAP_VERSION"] = version
-
-    if not (build_dir / "build.ninja").exists():
-        run(["meson", "setup", str(build_dir)], cwd=ROOT, env=env)
-
-    run(["meson", "compile", "-C", str(build_dir)], cwd=ROOT, env=env)
-    print("[*] 编译完成")
-
-
-def install_artifacts(version: str, version_dir: Path):
+class TapWrapper:
     """
-    整理产物到 api/ 目录，
+    TAP API SWIG Wrapper
+    ----------------------------
+    用法:
+    python wrapper.py <version>       # 编译指定版本
+    python wrapper.py v9.3.8
+    python wrapper.py clean           # 清理所有构建产物
+
+    说明:
+    - 调用 SWIG 生成 C++ 包装代码 -> v/{version}/src/
+    - 编译并链接生成 .so 扩展模块 -> api/
+    - 复制 SWIG 生成的 .py 包装文件 -> api/
     """
-    print("\n[4/5] 整理产物到 api/")
-    api_dir = ROOT / "api"
-    api_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self, version: str):
+        self.version = version
+        self.root = Path(__file__).parent.resolve()
 
-    # 基础 __init__.py
-    init_file = api_dir / "__init__.py"
-    if not init_file.exists():
-        init_file.write_text("# TAP API package\n", encoding="utf-8")
+        # 路径配置
+        self.version_dir = self.root / "v" / version
+        self.include_dir = self.version_dir / "include"
+        self.libs_dir = self.version_dir / "libs"
+        self.src_dir = self.version_dir / "src"
+        self.api_dir = self.root / "api"
+        self.interface_dir = self.root / "interface"
 
-    ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
+        # Python 环境
+        self.python_include = sysconfig.get_path("include")
+        self.py_ver = sysconfig.get_python_version()
 
-    # 复制扩展模块
-    for mod_name in ["tapmd", "taptd"]:
-        so_name = f"{mod_name}{ext_suffix}"
-        src = build_dir / so_name
-        if not src.exists():
-            pattern = build_dir / f"{mod_name}*.so*"
-            found = glob.glob(str(pattern))
-            if found:
-                src = Path(found[0])
-        if src.exists():
-            dst = api_dir / so_name
-            shutil.copy2(src, dst)
-            print(f"[*] 已复制: {so_name}")
-        else:
-            raise RuntimeError(f"[x] 未找到 {mod_name} 构建产物: {build_dir / so_name}")
+        # 接口定义: (swig文件, 模块名, 链接库文件名)
+        # 模块名必须与 .i 文件中的 %module(name) 一致
+        self.interfaces = [
+            ("mdapi.i", "mdapi", "libTapQuoteAPI.so"),
+            ("tdapi.i", "tdapi", "libiTapTradeAPI.so"),
+        ]
 
-    # 复制 TAP 官方动态库
-    lib_dir = version_dir / "libs"
-    for lib in tap_libs:
-        src = lib_dir / lib
-        if src.exists():
-            dst = api_dir / lib
-            shutil.copy2(src, dst)
-            print(f"[*] 已复制: {lib}")
+        self._validate_env()
 
-    # 移动 generator 生成的 Python 常量/类型文件（前缀 tap_）
-    src_dir = ROOT / "generator"
-    for py_file in src_dir.glob("tap_*.py"):
-        dst = api_dir / py_file.name
-        if dst.exists():
-            dst.unlink()
-        shutil.move(str(py_file), str(dst))
-        print(f"[*] 已移动: {py_file.name}")
-    
-    print("[*] 产物整理完成")
+    def _validate_env(self):
+        """校验目录和工具链"""
+        if not self.version_dir.exists():
+            available = [d.name for d in (self.root / "v").iterdir() if d.is_dir()]
+            raise SystemExit(
+                f"[错误] 版本目录不存在: {self.version_dir}\n"
+                f"可用版本: {', '.join(available)}"
+            )
+
+        if not self.include_dir.exists():
+            raise SystemExit(f"[错误] 头文件目录不存在: {self.include_dir}")
+        if not self.libs_dir.exists():
+            raise SystemExit(f"[错误] 库目录不存在: {self.libs_dir}")
+
+        # 检查工具
+        for tool in ["swig", "g++"]:
+            if shutil.which(tool) is None:
+                raise SystemExit(f"[错误] 未找到命令: {tool}，请先安装")
+
+    def clean(self):
+        """清理构建产物"""
+        print("=== 清理构建产物 ===")
+
+        # 清理版本对应的 src 目录
+        if self.src_dir.exists():
+            shutil.rmtree(self.src_dir)
+            print(f"  已删除: {self.src_dir}")
+
+        # 清理 api 目录下的旧产物（保留 __init__.py 和 __pycache__）
+        if self.api_dir.exists():
+            for pattern in ["_tap*.so*", "tap*.py"]:
+                for f in self.api_dir.glob(pattern):
+                    f.unlink()
+                    print(f"  已删除: {f}")
+
+    def run_swig(self, swig_file: str, module: str):
+        """运行 SWIG 生成 C++ 包装代码"""
+        out_cpp = self.src_dir / f"{module}_wrap.cpp"
+
+        cmd = [
+            "swig",
+            "-c++",
+            "-python",
+            "-threads",
+            f"-I{self.include_dir}",
+            "-outdir", str(self.src_dir),
+            "-o", str(out_cpp),
+            str(self.interface_dir / swig_file),
+        ]
+
+        print(f"\n[SWIG] {module} <- {swig_file}")
+        print(f"       {' '.join(cmd)}")
+        subprocess.run(cmd, check=True)
+        print(f"       生成: {out_cpp.name}")
+
+    def compile(self, module: str) -> Path:
+        """编译 C++ 源文件为 .o"""
+        src = self.src_dir / f"{module}_wrap.cpp"
+        obj = self.src_dir / f"{module}_wrap.o"
+
+        cmd = [
+            "g++",
+            "-c",
+            "-fPIC",
+            "-O2",
+            "-std=c++11",
+            f"-I{self.include_dir}",
+            f"-I{self.python_include}",
+            str(src),
+            "-o", str(obj),
+        ]
+
+        print(f"\n[CC]   {src.name}")
+        subprocess.run(cmd, check=True)
+        return obj
+
+    def link(self, module: str, lib_name: str, obj: Path):
+        """链接生成 Python 扩展 .so"""
+        so_name = f"_{module}.so"
+        so_path = self.api_dir / so_name
+        ctp_lib = self.libs_dir / lib_name
+
+        if not ctp_lib.exists():
+            raise FileNotFoundError(f"TAP 库文件不存在: {ctp_lib}")
+
+        cmd = [
+            "g++",
+            "-shared",
+            "-fPIC",
+            str(obj),
+            str(ctp_lib),
+            "-lboost_locale",
+            f"-Wl,-rpath,{self.libs_dir}",          # 运行时自动找到 v/{version}/libs/ 下的依赖库
+            "-o", str(so_path),
+        ]
+
+        print(f"\n[LD]   {so_name}")
+        print(f"       链接库: {ctp_lib}")
+        subprocess.run(cmd, check=True)
+        print(f"       输出: {so_path}")
+
+    def install_py(self, module: str):
+        """将 SWIG 生成的 .py shadow 文件安装到 api/ 目录"""
+        src_py = self.src_dir / f"{module}.py"
+        dst_py = self.api_dir / f"{module}.py"
+
+        if src_py.exists():
+            shutil.copy2(src_py, dst_py)
+            print(f"\n[INSTALL] {src_py.name} -> {dst_py}")
+
+    def build(self):
+        """完整构建流程"""
+        print(f"{'='*50}")
+        print(f"开始构建 TAP API")
+        print(f"版本: {self.version}")
+        print(f"Python: {self.py_ver}")
+        print(f"{'='*50}")
+
+        self.src_dir.mkdir(parents=True, exist_ok=True)
+        self.api_dir.mkdir(parents=True, exist_ok=True)
+
+        for swig_file, module, lib_name in self.interfaces:
+            self.run_swig(swig_file, module)
+            obj = self.compile(module)
+            self.link(module, lib_name, obj)
+            self.install_py(module)
+
+        print(f"\n{'='*50}")
+        print("构建完成")
+        print(f"扩展模块: {self.api_dir}/_tap*.so")
+        print(f"Python 包装: {self.api_dir}/tap*.py")
+        print(f"{'='*50}")
 
 
-def generate_stubs():
-    """生成 .pyi 类型提示文件"""
-    print("\n[5/5] 生成类型存根 (.pyi)")
-    env = os.environ.copy()
-    parent_dir = str(ROOT.parent)
-    env["PYTHONPATH"] = parent_dir + os.pathsep + env.get("PYTHONPATH", "")
-
-    for mod_base in ["tap.api.tapmd", "tap.api.taptd"]:
-        print(f"[*] 生成: {mod_base}")
-        ret = subprocess.run([
-            sys.executable, "-m", "pybind11_stubgen",
-            "-o=.", mod_base
-        ], cwd=parent_dir, env=env)
-        if ret.returncode != 0:
-            print(f"[x] {mod_base} 存根生成失败，可稍后手动执行")
-
-    print("[*] 存根生成完成")
+def list_versions(root: Path) -> list:
+    """列出可用版本"""
+    v_dir = root / "v"
+    if not v_dir.exists():
+        return []
+    return sorted([d.name for d in v_dir.iterdir() if d.is_dir()])
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="TAP Python API 封装脚本",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-示例:
-  python gen.py --version v9.3.8             # 完整构建
-  python gen.py --version v9.3.8 --clean     # 清理后重新构建
-  python gen.py --skip-generate               # 跳过代码生成（仅编译）
-  python gen.py --only-stubs                  # 仅重新生成存根
-        """
-    )
-    parser.add_argument(
-        "--version",
-        default="v9.3.8",
-        help="TAP 版本目录名，如 v9.3.8 (默认: v9.3.8)"
-    )
-    parser.add_argument(
-        "--skip-generate",
-        action="store_true",
-        help="跳过 C++ 绑定代码生成（仅编译）"
-    )
-    parser.add_argument(
-        "--skip-stubs",
-        action="store_true",
-        help="跳过 .pyi 存根生成"
-    )
-    parser.add_argument(
-        "--clean",
-        action="store_true",
-        help="清理 .build/ 后重新构建"
-    )
-    parser.add_argument(
-        "--only-stubs",
-        action="store_true",
-        help="仅重新生成存根文件（不编译）"
-    )
+    root = Path(__file__).parent.resolve()
 
-    args = parser.parse_args()
-    version = args.version
-    version_dir = ROOT / "v" / version
+    if len(sys.argv) < 2:
+        versions = list_versions(root)
+        print("用法:")
+        print(f"  python wrapper.py <version>    # 编译指定版本")
+        print(f"  python wrapper.py clean        # 清理构建产物")
+        print(f"\n可用版本:")
+        for v in versions:
+            print(f"  - {v}")
+        sys.exit(0)
 
-    if args.only_stubs:
-        try:
-            generate_stubs()
-            print("\n[*] 存根生成完成")
-        except Exception as e:
-            print(f"\n[x] 错误: {e}", file=sys.stderr)
-            sys.exit(1)
+    command = sys.argv[1]
+
+    if command == "clean":
+        # 清理所有版本的 src 和 api 下的产物
+        print("=== 全局清理 ===")
+        v_dir = root / "v"
+        if v_dir.exists():
+            for d in v_dir.iterdir():
+                if d.is_dir():
+                    src = d / "src"
+                    if src.exists():
+                        shutil.rmtree(src)
+                        print(f"  已删除: {src}")
+
+        api_dir = root / "api"
+        if api_dir.exists():
+            for pattern in ["_tap*.so*", "tap*.py"]:
+                for f in api_dir.glob(pattern):
+                    f.unlink()
+                    print(f"  已删除: {f}")
+        print("清理完成")
         return
 
-    try:
-        check_environment(version_dir)
-
-        if not args.skip_generate:
-            generate_bindings(version, version_dir)
-
-        meson_build(version, clean=args.clean)
-        install_artifacts(version, version_dir)
-
-        if not args.skip_stubs:
-            generate_stubs()
-
-        print(f"\n构建成功 | 版本: {version}")
-        print(f"产物路径: {ROOT / 'api'}")
-        print("使用方式: from tap.api import tapmd, taptd")
-
-    except RuntimeError as e:
-        print(f"\n[x] 错误: {e}", file=sys.stderr)
-        sys.exit(1)
-    except KeyboardInterrupt:
-        print("\n[!] 用户中断")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n[x] 未预期错误: {e}", file=sys.stderr)
-        sys.exit(1)
+    # 构建指定版本
+    wrapper = TapWrapper(command)
+    wrapper.build()
 
 
 if __name__ == "__main__":

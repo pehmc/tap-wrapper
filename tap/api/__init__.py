@@ -1,6 +1,6 @@
 # TAP API package
 
-from .tapmd import MdApi
-from .taptd import TdApi
+from .mdapi import *
+from .tdapi import *
 
-__all__ = ['MdApi', 'TdApi']
+__all__ = ['mdapi', 'tdapi']

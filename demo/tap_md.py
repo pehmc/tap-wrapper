@@ -4,13 +4,17 @@ See LICENSE file in the project root for full license information.
 """
 
 import os
+import sys
 import time
 from pathlib import Path
 
-from tap.api import MdApi
+# 添加tap目录到Python路径
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from tap.api import mdapi
 
 
-class TapQuoteApi(MdApi):
+class TapQuoteApi(mdapi.ITapQuoteAPINotify):
     """TAP 行情 API 封装（含合约查询）"""
 
     def __init__(self):
@@ -20,9 +24,79 @@ class TapQuoteApi(MdApi):
         self.subscribed_symbols = set()
         self.commodities = []          # 缓存商品列表
         self.contracts = []            # 缓存合约列表
+        self._api = None
 
-    def onRspLogin(self, error: int, data: dict) -> None:
-        """登录响应"""
+    def init(self):
+        """初始化API"""
+        mdapi.SetTapQuoteAPIDataPath(str(Path.cwd() / "con" / "md"))
+        mdapi.SetTapQuoteAPILogLevel(mdapi.APILOGLEVEL_ERROR)
+
+    def createTapQuoteAPI(self, req):
+        """创建行情API"""
+        app_info = mdapi.TapAPIApplicationInfo()
+        app_info.AuthCode = req.get("AuthCode", "")
+        app_info.KeyOperationLogPath = req.get("KeyOperationLogPath", "")
+        # 使用包装函数创建API，iResult 是引用参数，使用列表传递
+        iResult = [0]
+        self._api = mdapi.CreateTapQuoteAPI(app_info, iResult)
+        self._api.SetAPINotify(self)
+
+    def setHostAddress(self, host, port):
+        """设置服务器地址"""
+        self._api.SetHostAddress(host, port)
+
+    def login(self, auth):
+        """登录"""
+        req = mdapi.TapAPIQuoteLoginAuth()
+        req.UserNo = auth.get("UserNo", "")
+        req.Password = auth.get("Password", "")
+        req.ISModifyPassword = auth.get("ISModifyPassword", "N")
+        req.ISDDA = auth.get("ISDDA", "N")
+        self._api.Login(req)
+
+    def disconnect(self):
+        """断开连接"""
+        if self._api:
+            self._api.Disconnect()
+
+    def exit(self):
+        """退出API"""
+        if self._api:
+            mdapi.FreeTapQuoteAPI(self._api)
+            self._api = None
+
+    def qryCommodity(self):
+        """查询商品"""
+        session_id = [0]
+        self._api.QryCommodity(session_id)
+
+    def qryContract(self, req):
+        """查询合约"""
+        session_id = [0]
+        commodity = mdapi.TapAPICommodity()
+        commodity.ExchangeNo = req.get("ExchangeNo", "")
+        commodity.CommodityType = req.get("CommodityType", "")
+        commodity.CommodityNo = req.get("CommodityNo", "")
+        self._api.QryContract(session_id, commodity)
+
+    def subscribeQuote(self, contract):
+        """订阅行情"""
+        session_id = [0]
+        tap_contract = mdapi.TapAPIContract()
+        comm = mdapi.TapAPICommodity()
+        comm.ExchangeNo = contract.get("ExchangeNo", "")
+        comm.CommodityType = contract.get("CommodityType", "")
+        comm.CommodityNo = contract.get("CommodityNo", "")
+        tap_contract.Commodity = comm
+        tap_contract.ContractNo1 = contract.get("ContractNo1", "")
+        tap_contract.CallOrPutFlag1 = contract.get("CallOrPutFlag1", "0")
+        tap_contract.CallOrPutFlag2 = contract.get("CallOrPutFlag2", "0")
+        tap_contract.StrikePrice1 = contract.get("StrikePrice1", "0")
+        tap_contract.StrikePrice2 = contract.get("StrikePrice2", "0")
+        self._api.SubscribeQuote(session_id, tap_contract)
+
+    def OnRspLogin(self, error: int, data: dict) -> None:
+        """登录回报"""
         if error != 0:
             print(f"行情服务器登录失败，错误码：{error}")
             self.login_status = False
@@ -31,17 +105,17 @@ class TapQuoteApi(MdApi):
             self.login_status = True
             self.connect_status = True
 
-    def onAPIReady(self) -> None:
+    def OnAPIReady(self) -> None:
         """API 就绪后，先查商品，再查合约"""
         print("行情 API 已就绪，开始查询商品信息...")
         self.qryCommodity()
 
-    def onDisconnect(self, reason: int) -> None:
+    def OnDisconnect(self, reason: int) -> None:
         self.connect_status = False
         self.login_status = False
         print(f"行情服务器连接断开，原因码：{reason}")
 
-    def onRspQryCommodity(self, session: int, error: int, last: str, data: dict) -> None:
+    def OnRspQryCommodity(self, session: int, error: int, last: str, data: dict) -> None:
         """商品查询回报"""
         if error != 0:
             print(f"查询商品失败，错误码：{error}")
@@ -78,7 +152,7 @@ class TapQuoteApi(MdApi):
                     comm = c.get("Commodity", {})
                     print(f"  {comm.get('ExchangeNo')} {comm.get('CommodityNo')} ({c.get('CommodityEngName')})")
 
-    def onRspQryContract(self, session: int, error: int, last: str, data: dict) -> None:
+    def OnRspQryContract(self, session: int, error: int, last: str, data: dict) -> None:
         """合约查询回报"""
         if error != 0:
             print(f"查询合约失败，错误码：{error}")
@@ -111,14 +185,14 @@ class TapQuoteApi(MdApi):
             "ContractNo1": c.get("ContractNo1"),
             "CallOrPutFlag1": "0",
             "CallOrPutFlag2": "0",
-            "StrikePrice1": "0",   # ← 从 0 改为 "0"
-            "StrikePrice2": "0",   # ← 从 0 改为 "0"
+            "StrikePrice1": "0",
+            "StrikePrice2": "0",
         }
         symbol = comm.get("CommodityNo", "") + c.get("ContractNo1", "")
         print(f"订阅行情: {symbol}")
         self.subscribeQuote(tap_contract)
 
-    def onRspSubscribeQuote(self, session: int, error: int, last: str, data: dict) -> None:
+    def OnRspSubscribeQuote(self, session: int, error: int, last: str, data: dict) -> None:
         if error != 0:
             print(f"订阅行情失败，错误码：{error}")
             return
@@ -126,7 +200,7 @@ class TapQuoteApi(MdApi):
         symbol = comm.get("CommodityNo", "") + data.get("ContractNo1", "")
         print(f"订阅成功：{symbol}")
 
-    def onRtnQuote(self, data: dict) -> None:
+    def OnRtnQuote(self, data: dict) -> None:
         contract = data.get("Contract", {})
         comm = contract.get("Commodity", {})
         symbol = comm.get("CommodityNo", "") + contract.get("ContractNo1", "")

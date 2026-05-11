@@ -123,34 +123,34 @@ class TapQuoteApi(mdapi.ITapQuoteAPINotify):
 
         if data:
             self.commodities.append(data)
-            commodity = data.get("Commodity", {})
-            print(f"  商品: {commodity.get('CommodityNo')} | "
-                  f"交易所: {commodity.get('ExchangeNo')} | "
-                  f"类型: {commodity.get('CommodityType')} | "
-                  f"名称: {data.get('CommodityEngName', '')}")
+            commodity = data.Commodity
+            print(f"  商品: {commodity.CommodityNo} | "
+                  f"交易所: {commodity.ExchangeNo} | "
+                  f"类型: {commodity.CommodityType} | "
+                  f"名称: {data.CommodityEngName}")
 
         if last == "Y":
             print(f"商品查询完成，共 {len(self.commodities)} 条")
             # 以 COMEX 黄金为例，查询其下的合约
             target = next((
                 c for c in self.commodities
-                if c.get("Commodity", {}).get("ExchangeNo") == "COMEX"
-                and c.get("Commodity", {}).get("CommodityNo") == "GC"
+                if c.Commodity.ExchangeNo == "COMEX"
+                and c.Commodity.CommodityNo == "GC"
             ), None)
             if target:
-                comm = target.get("Commodity", {})
-                print(f"开始查询合约: {comm.get('CommodityNo')}")
+                comm = target.Commodity
+                print(f"开始查询合约: {comm.CommodityNo}")
                 req = {
-                    "ExchangeNo": comm.get("ExchangeNo"),
-                    "CommodityType": comm.get("CommodityType"),
-                    "CommodityNo": comm.get("CommodityNo"),
+                    "ExchangeNo": comm.ExchangeNo,
+                    "CommodityType": comm.CommodityType,
+                    "CommodityNo": comm.CommodityNo,
                 }
                 self.qryContract(req)
             else:
                 print("未找到目标商品，可用商品如下：")
                 for c in self.commodities[:10]:
-                    comm = c.get("Commodity", {})
-                    print(f"  {comm.get('ExchangeNo')} {comm.get('CommodityNo')} ({c.get('CommodityEngName')})")
+                    comm = c.Commodity
+                    print(f"  {comm.ExchangeNo} {comm.CommodityNo} ({c.CommodityEngName})")
 
     def OnRspQryContract(self, session: int, error: int, last: str, data: dict) -> None:
         """合约查询回报"""
@@ -160,12 +160,12 @@ class TapQuoteApi(mdapi.ITapQuoteAPINotify):
 
         if data:
             self.contracts.append(data)
-            contract = data.get("Contract", {})
-            comm = contract.get("Commodity", {})
-            symbol = comm.get("CommodityNo", "") + contract.get("ContractNo1", "")
+            contract = data.Contract
+            comm = contract.Commodity
+            symbol = comm.CommodityNo + contract.ContractNo1
             print(f"  合约: {symbol} | "
-                  f"到期日: {data.get('ContractExpDate', 'N/A')} | "
-                  f"名称: {data.get('ContractName', '')}")
+                  f"到期日: {data.ContractExpDate} | "
+                  f"名称: {data.ContractName}")
 
         if last == "Y":
             print(f"合约查询完成，共 {len(self.contracts)} 条")
@@ -176,19 +176,19 @@ class TapQuoteApi(mdapi.ITapQuoteAPINotify):
 
     def _do_subscribe(self, contract: dict) -> None:
         """执行订阅（使用服务器返回的真实合约代码）"""
-        c = contract.get("Contract", {})
-        comm = c.get("Commodity", {})
+        c = contract.Contract
+        comm = c.Commodity
         tap_contract = {
-            "ExchangeNo": comm.get("ExchangeNo"),
-            "CommodityType": comm.get("CommodityType"),
-            "CommodityNo": comm.get("CommodityNo"),
-            "ContractNo1": c.get("ContractNo1"),
+            "ExchangeNo": comm.ExchangeNo,
+            "CommodityType": comm.CommodityType,
+            "CommodityNo": comm.CommodityNo,
+            "ContractNo1": c.ContractNo1,
             "CallOrPutFlag1": "0",
             "CallOrPutFlag2": "0",
             "StrikePrice1": "0",
             "StrikePrice2": "0",
         }
-        symbol = comm.get("CommodityNo", "") + c.get("ContractNo1", "")
+        symbol = comm.CommodityNo + c.ContractNo1
         print(f"订阅行情: {symbol}")
         self.subscribeQuote(tap_contract)
 
@@ -196,19 +196,24 @@ class TapQuoteApi(mdapi.ITapQuoteAPINotify):
         if error != 0:
             print(f"订阅行情失败，错误码：{error}")
             return
-        comm = data.get("Commodity", {})
-        symbol = comm.get("CommodityNo", "") + data.get("ContractNo1", "")
+        contract = data.Contract
+        comm = contract.Commodity
+        symbol = comm.CommodityNo + contract.ContractNo1
         print(f"订阅成功：{symbol}")
 
     def OnRtnQuote(self, data: dict) -> None:
-        contract = data.get("Contract", {})
-        comm = contract.get("Commodity", {})
-        symbol = comm.get("CommodityNo", "") + contract.get("ContractNo1", "")
-        print(f"[{data.get('DateTimeStamp', 'N/A')}] {symbol} | "
-              f"最新价={data.get('QLastPrice', 'N/A')} | "
-              f"成交量={data.get('QTotalQty', 'N/A')} | "
-              f"买一={data.get('QBidPrice', [None])[0]}/{data.get('QBidQty', [None])[0]} | "
-              f"卖一={data.get('QAskPrice', [None])[0]}/{data.get('QAskQty', [None])[0]}")
+        contract = data.Contract
+        comm = contract.Commodity
+        symbol = comm.CommodityNo + contract.ContractNo1
+        bid_price = data.QBidPrice[0] if data.QBidPrice else None
+        bid_qty = data.QBidQty[0] if data.QBidQty else None
+        ask_price = data.QAskPrice[0] if data.QAskPrice else None
+        ask_qty = data.QAskQty[0] if data.QAskQty else None
+        print(f"[{data.DateTimeStamp}] {symbol} | "
+              f"最新价={data.QLastPrice} | "
+              f"成交量={data.QTotalQty} | "
+              f"买一={bid_price}/{bid_qty} | "
+              f"卖一={ask_price}/{ask_qty}")
 
     def connect(self, host: str, port: int, username: str, password: str, auth_code: str = "") -> None:
         if self.connect_status:

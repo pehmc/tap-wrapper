@@ -139,6 +139,10 @@ class TapTradeApi(tdapi.ITapTradeAPINotify):
         session_id = [0]
         self._api.CancelOrder(session_id, req)
 
+    def OnConnect(self, host_address):
+        """连接成功"""
+        print(f"交易服务器连接成功: {host_address}")
+
     def OnAPIReady(self):
         """API就绪"""
         print("交易API已就绪")
@@ -160,39 +164,67 @@ class TapTradeApi(tdapi.ITapTradeAPINotify):
             self.login_status = True
             self.connect_status = True
 
+    def OnRspQryAccount(self, session_id, error_code, is_last, account):
+        """账户查询响应"""
+        if error_code != 0:
+            print(f"查询账户失败，错误码：{error_code}")
+            return
+        if account:
+            print(f"账户信息: 账号={account.AccountNo}, "
+                  f"类型={account.AccountType}, "
+                  f"状态={account.AccountState}")
+
+    def OnRspQryPosition(self, session_id, error_code, is_last, position):
+        """持仓查询响应"""
+        if error_code != 0:
+            print(f"查询持仓失败，错误码：{error_code}")
+            return
+        if position:
+            print(f"持仓信息: 合约={position.CommodityNo}{position.ContractNo}, "
+                  f"方向={position.MatchSide}, "
+                  f"数量={position.PositionQty}")
+
+    def OnRspQryOrder(self, session_id, error_code, is_last, order):
+        """委托查询响应"""
+        if error_code != 0:
+            print(f"查询委托失败，错误码：{error_code}")
+            return
+        if order:
+            print(f"委托信息: 委托号={order.OrderRef}, "
+                  f"状态={order.OrderState}, "
+                  f"数量={order.OrderQty}")
+
     def OnRtnAccount(self, account):
         """账户回报"""
         if account:
-            print(f"账户回报: 账号={account.get('AccountNo', '')}, "
-                  f"余额={account.get('Balance', 0)}, "
-                  f"可用={account.get('Available', 0)}")
+            print(f"账户回报: 账号={account.AccountNo}")
 
     def OnRtnPosition(self, position):
         """持仓回报"""
         if position:
-            print(f"持仓回报: 合约={position.get('ContractNo', '')}, "
-                  f"方向={position.get('PositionEffect', '')}, "
-                  f"数量={position.get('PositionQty', 0)}")
+            print(f"持仓回报: 合约={position.CommodityNo}{position.ContractNo}, "
+                  f"方向={position.MatchSide}, "
+                  f"数量={position.PositionQty}")
 
     def OnRtnOrder(self, order):
         """委托回报"""
         if order:
-            print(f"委托回报: 委托号={order.get('OrderRef', '')}, "
-                  f"状态={order.get('OrderState', '')}, "
-                  f"数量={order.get('OrderQty', 0)}")
+            print(f"委托回报: 委托号={order.OrderRef}, "
+                  f"状态={order.OrderState}, "
+                  f"数量={order.OrderQty}")
 
     def OnRtnFill(self, fill):
         """成交回报"""
         if fill:
-            print(f"成交回报: 委托号={fill.get('OrderRef', '')}, "
-                  f"成交价={fill.get('MatchPrice', 0)}, "
-                  f"成交量={fill.get('MatchQty', 0)}")
+            print(f"成交回报: 委托号={fill.OrderRef}, "
+                  f"成交价={fill.MatchPrice}, "
+                  f"成交量={fill.MatchQty}")
 
 
 def main():
     """主函数"""
     config = {
-        "host": "61.163.243.173",
+        "host": "123.161.206.213",
         "port": 8383,
         "username": "",
         "password": "",
